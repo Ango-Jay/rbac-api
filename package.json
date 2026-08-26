@@ -1,0 +1,15 @@
+{
+  "name": "rbac-api",
+  "version": "1.0.0",
+  "description": "rbac sample implementation",
+  "license": "ISC",
+  "private": true,
+  "workspaces": [
+    "server"
+  ],
+  "scripts": {
+    "dev": "yarn workspace @rbac-api/server start:dev",
+    "build": "yarn workspace @rbac-api/server build",
+    "start": "yarn workspace @rbac-api/server start:prod"
+  }
+}
