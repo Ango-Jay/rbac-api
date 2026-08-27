@@ -10,6 +10,8 @@
   "scripts": {
     "dev": "yarn workspace @rbac-api/server start:dev",
     "build": "yarn workspace @rbac-api/server build",
-    "start": "yarn workspace @rbac-api/server start:prod"
+    "start": "yarn workspace @rbac-api/server start:prod",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down"
   }
 }
