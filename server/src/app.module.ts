@@ -1,6 +1,7 @@
 import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { AuthModule } from './api/auth/auth.module';
 import { UsersModule } from './api/users/users.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -21,6 +22,7 @@ import typeormConfig from './config/typeorm';
       useFactory: (configService: ConfigService) =>
         configService.getOrThrow('typeorm'),
     }),
+    AuthModule,
     UsersModule,
   ],
   controllers: [AppController],

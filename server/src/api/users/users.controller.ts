@@ -1,23 +1,15 @@
-import { Controller, Get, Req, UnauthorizedException } from '@nestjs/common';
-import type { Request } from 'express';
+import { Controller, Get, Req, UseGuards } from '@nestjs/common';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import type { AuthenticatedRequest } from '../auth/auth.types';
 import { UsersService } from './users.service';
-
-type AuthenticatedRequest = Request & {
-  user?: { id: string };
-};
 
 @Controller('users')
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
+  @UseGuards(JwtAuthGuard)
   @Get('profile')
   getUserProfile(@Req() req: AuthenticatedRequest) {
-    const userId = req.user?.id;
-
-    if (!userId) {
-      throw new UnauthorizedException();
-    }
-
-    return this.usersService.getUserProfile(userId);
+    return this.usersService.getUserProfile(req.user.id);
   }
 }

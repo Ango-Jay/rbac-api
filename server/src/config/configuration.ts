@@ -1,4 +1,7 @@
 export default () => ({
   port: parseInt(process.env.PORT ?? '3000', 10),
   nodeEnv: process.env.NODE_ENV ?? 'development',
+  auth: {
+    jwtSecret: process.env.JWT_SECRET,
+  },
 });
