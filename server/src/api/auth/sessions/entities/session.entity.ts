@@ -22,6 +22,12 @@ export class Session {
   refreshTokenHash: string;
 
   @Column({ type: 'varchar', nullable: true })
+  previousRefreshTokenHash: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  refreshTokenGraceExpiresAt: Date | null;
+
+  @Column({ type: 'varchar', nullable: true })
   userAgent: string | null;
 
   @Column({ type: 'varchar', nullable: true })

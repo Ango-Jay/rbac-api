@@ -6,21 +6,29 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import * as argon2 from 'argon2';
-import { createHash, randomUUID } from 'crypto';
+import { randomUUID } from 'crypto';
 import type { Request, Response } from 'express';
 import { TokenExpiredError } from 'jsonwebtoken';
-import { MoreThan, Repository } from 'typeorm';
+import { DataSource, MoreThan, Repository } from 'typeorm';
 import { User } from '../users/entities/user.entity';
 import {
   ACCESS_TOKEN_COOKIE,
   ACCESS_TOKEN_TTL,
   REFRESH_TOKEN_COOKIE,
+  REFRESH_TOKEN_GRACE_PERIOD,
   REFRESH_TOKEN_TTL,
+  hashToken,
   ttlToMs,
 } from './auth.constants';
 import { LoginDto } from './dto/login.dto';
 import { Session } from './sessions/entities/session.entity';
 import { AuthenticatedUser, JwtPayload } from './auth.types';
+
+type RotationResult = {
+  user: AuthenticatedUser;
+  accessToken?: string;
+  refreshToken?: string;
+};
 
 @Injectable()
 export class AuthService {
@@ -31,6 +39,7 @@ export class AuthService {
     private readonly sessionsRepository: Repository<Session>,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
+    private readonly dataSource: DataSource,
   ) {}
 
   async login(
@@ -51,7 +60,7 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    if (user.status === 'inactive' || user.status === 'deleted') {
+    if (!this.isUserActive(user)) {
       throw new UnauthorizedException('Account is not active');
     }
 
@@ -89,35 +98,88 @@ export class AuthService {
       throw new UnauthorizedException();
     }
 
-    const refreshTokenHash = this.hashRefreshToken(refreshToken);
-    const session = await this.sessionsRepository.findOne({
+    const refreshHash = hashToken(refreshToken);
+
+    const graceSession = await this.sessionsRepository.findOne({
       where: {
-        refreshTokenHash,
+        previousRefreshTokenHash: refreshHash,
         isRevoked: false,
         expiresAt: MoreThan(new Date()),
+        refreshTokenGraceExpiresAt: MoreThan(new Date()),
       },
       relations: { user: true },
     });
 
-    if (!session?.user) {
-      throw new UnauthorizedException();
+    if (graceSession?.user && this.isUserActive(graceSession.user)) {
+      return this.toAuthenticatedUserFromUser(graceSession.user);
     }
 
-    if (
-      session.user.status === 'inactive' ||
-      session.user.status === 'deleted'
-    ) {
-      throw new UnauthorizedException();
+    const rotationResult = await this.dataSource.transaction<RotationResult>(
+      async (manager) => {
+        let session = await manager.findOne(Session, {
+          where: {
+            refreshTokenHash: refreshHash,
+            isRevoked: false,
+            expiresAt: MoreThan(new Date()),
+          },
+          lock: { mode: 'pessimistic_write' },
+          relations: { user: true },
+        });
+
+        if (!session) {
+          session = await manager.findOne(Session, {
+            where: {
+              previousRefreshTokenHash: refreshHash,
+              isRevoked: false,
+              expiresAt: MoreThan(new Date()),
+            },
+            relations: { user: true },
+          });
+
+          if (
+            session?.user &&
+            session.refreshTokenGraceExpiresAt &&
+            session.refreshTokenGraceExpiresAt > new Date() &&
+            this.isUserActive(session.user)
+          ) {
+            return { user: this.toAuthenticatedUserFromUser(session.user) };
+          }
+
+          throw new UnauthorizedException();
+        }
+
+        if (!session.user || !this.isUserActive(session.user)) {
+          throw new UnauthorizedException();
+        }
+
+        const newAccessToken = this.signAccessToken(session.user);
+        const newRefreshToken = randomUUID();
+
+        session.previousRefreshTokenHash = refreshHash;
+        session.refreshTokenHash = hashToken(newRefreshToken);
+        session.refreshTokenGraceExpiresAt = new Date(
+          Date.now() + ttlToMs(REFRESH_TOKEN_GRACE_PERIOD),
+        );
+
+        await manager.save(session);
+
+        return {
+          user: this.toAuthenticatedUserFromUser(session.user),
+          accessToken: newAccessToken,
+          refreshToken: newRefreshToken,
+        };
+      },
+    );
+
+    if (rotationResult.accessToken && rotationResult.refreshToken) {
+      this.setTokenCookies(
+        res,
+        rotationResult.accessToken,
+        rotationResult.refreshToken,
+      );
     }
 
-    const accessTokenNew = this.signAccessToken(session.user);
-    this.setAccessTokenCookie(res, accessTokenNew);
-
-    return {
-      id: session.user.id,
-      email: session.user.email,
-      role: session.user.role,
-    };
+    return rotationResult.user;
   }
 
   private async issueTokens(
@@ -126,7 +188,7 @@ export class AuthService {
   ): Promise<{ accessToken: string; refreshToken: string }> {
     const accessToken = this.signAccessToken(user);
     const refreshToken = randomUUID();
-    const refreshTokenHash = this.hashRefreshToken(refreshToken);
+    const refreshTokenHash = hashToken(refreshToken);
 
     await this.sessionsRepository.save({
       user,
@@ -149,8 +211,8 @@ export class AuthService {
     return this.jwtService.sign(payload);
   }
 
-  private hashRefreshToken(token: string): string {
-    return createHash('sha256').update(token).digest('hex');
+  private isUserActive(user: User): boolean {
+    return user.status !== 'inactive' && user.status !== 'deleted';
   }
 
   private toAuthenticatedUser(payload: JwtPayload): AuthenticatedUser {
@@ -161,17 +223,33 @@ export class AuthService {
     };
   }
 
+  private toAuthenticatedUserFromUser(user: User): AuthenticatedUser {
+    return {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+    };
+  }
+
   private setTokenCookies(
     res: Response,
     accessToken: string,
     refreshToken: string,
   ): void {
     this.setAccessTokenCookie(res, accessToken);
-    res.cookie(REFRESH_TOKEN_COOKIE, refreshToken, this.getCookieOptions(REFRESH_TOKEN_TTL));
+    res.cookie(
+      REFRESH_TOKEN_COOKIE,
+      refreshToken,
+      this.getCookieOptions(REFRESH_TOKEN_TTL),
+    );
   }
 
   private setAccessTokenCookie(res: Response, accessToken: string): void {
-    res.cookie(ACCESS_TOKEN_COOKIE, accessToken, this.getCookieOptions(ACCESS_TOKEN_TTL));
+    res.cookie(
+      ACCESS_TOKEN_COOKIE,
+      accessToken,
+      this.getCookieOptions(ACCESS_TOKEN_TTL),
+    );
   }
 
   private getCookieOptions(ttl: string) {

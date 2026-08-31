@@ -1,5 +1,8 @@
+import { createHash } from 'crypto';
+
 export const ACCESS_TOKEN_TTL = '15m';
 export const REFRESH_TOKEN_TTL = '7d';
+export const REFRESH_TOKEN_GRACE_PERIOD = '10s';
 
 export const ACCESS_TOKEN_COOKIE = 'access_token';
 export const REFRESH_TOKEN_COOKIE = 'refresh_token';
@@ -10,6 +13,10 @@ const TTL_MULTIPLIERS: Record<string, number> = {
   h: 3_600_000,
   d: 86_400_000,
 };
+
+export function hashToken(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
 
 export function ttlToMs(ttl: string): number {
   const match = ttl.match(/^(\d+)([smhd])$/);
