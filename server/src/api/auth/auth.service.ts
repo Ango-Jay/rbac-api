@@ -235,7 +235,7 @@ export class AuthService {
     accessToken: string,
     ttlSeconds: number,
   ): Promise<void> {
-    await this.redisCache.setex(
+    await this.redisCache.setWithExpiry(
       `${ACCESS_TOKEN_BLACKLIST_PREFIX}${hashToken(accessToken)}`,
       ttlSeconds,
       '1',
@@ -243,7 +243,7 @@ export class AuthService {
   }
 
   private async isAccessTokenBlacklisted(accessToken: string): Promise<boolean> {
-    const result = await this.redisCache.get(
+    const result = await this.redisCache.getValue(
       `${ACCESS_TOKEN_BLACKLIST_PREFIX}${hashToken(accessToken)}`,
     );
     return result !== null;

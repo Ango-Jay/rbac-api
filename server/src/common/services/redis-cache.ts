@@ -28,14 +28,47 @@ export class RedisCacheHelper implements OnModuleDestroy {
     }
   }
 
-  async setex(key: string, ttlSeconds: number, value: string): Promise<void> {
+  async setWithExpiry(
+    key: string,
+    ttlSeconds: number,
+    value: string,
+  ): Promise<void> {
     await this.ensureConnection();
     await this.redisClient.setex(key, ttlSeconds, value);
   }
 
-  async get(key: string): Promise<string | null> {
+  async getValue(key: string): Promise<string | null> {
     await this.ensureConnection();
     return this.redisClient.get(key);
+  }
+
+  async findKeysMatching(pattern: string): Promise<string[]> {
+    await this.ensureConnection();
+    const matchingKeys: string[] = [];
+    let cursor = '0';
+
+    do {
+      const [nextCursor, batchKeys] = await this.redisClient.scan(
+        cursor,
+        'MATCH',
+        pattern,
+        'COUNT',
+        100,
+      );
+      cursor = nextCursor;
+      matchingKeys.push(...batchKeys);
+    } while (cursor !== '0');
+
+    return matchingKeys;
+  }
+
+  async deleteKeys(...keys: string[]): Promise<void> {
+    if (keys.length === 0) {
+      return;
+    }
+
+    await this.ensureConnection();
+    await this.redisClient.del(...keys);
   }
 
   private async ensureConnection(): Promise<void> {
