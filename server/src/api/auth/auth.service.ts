@@ -10,8 +10,10 @@ import { randomUUID } from 'crypto';
 import type { Request, Response } from 'express';
 import { TokenExpiredError } from 'jsonwebtoken';
 import { DataSource, MoreThan, Repository } from 'typeorm';
+import { RedisCacheHelper } from '../../common/services/redis-cache';
 import { User } from '../users/entities/user.entity';
 import {
+  ACCESS_TOKEN_BLACKLIST_PREFIX,
   ACCESS_TOKEN_COOKIE,
   ACCESS_TOKEN_TTL,
   REFRESH_TOKEN_COOKIE,
@@ -23,6 +25,8 @@ import {
 import { LoginDto } from './dto/login.dto';
 import { Session } from './sessions/entities/session.entity';
 import { AuthenticatedUser, JwtPayload } from './auth.types';
+
+type JwtPayloadWithExp = JwtPayload & { exp: number };
 
 type RotationResult = {
   user: AuthenticatedUser;
@@ -40,6 +44,7 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly dataSource: DataSource,
+    private readonly redisCache: RedisCacheHelper,
   ) {}
 
   async login(
@@ -71,6 +76,42 @@ export class AuthService {
     return { message: 'Login successful' };
   }
 
+  async logout(req: Request, res: Response): Promise<{ message: string }> {
+    const accessToken = req.cookies?.[ACCESS_TOKEN_COOKIE] as string | undefined;
+    const refreshToken = req.cookies?.[REFRESH_TOKEN_COOKIE] as
+      | string
+      | undefined;
+
+    if (accessToken) {
+      try {
+        const payload =
+          this.jwtService.verify<JwtPayloadWithExp>(accessToken);
+        const ttlSeconds = Math.max(
+          1,
+          payload.exp - Math.floor(Date.now() / 1000),
+        );
+        await this.blacklistAccessToken(accessToken, ttlSeconds);
+      } catch {
+        // Access token missing/invalid/expired: skip blacklist
+      }
+    }
+
+    if (refreshToken) {
+      const session = await this.sessionsRepository.findOne({
+        where: { refreshTokenHash: hashToken(refreshToken) },
+      });
+
+      if (session && !session.isRevoked) {
+        session.isRevoked = true;
+        await this.sessionsRepository.save(session);
+      }
+    }
+
+    this.clearTokenCookies(res);
+
+    return { message: 'Logout successful' };
+  }
+
   async validateOrRefreshAccess(
     req: Request,
     res: Response,
@@ -83,8 +124,16 @@ export class AuthService {
 
     try {
       const payload = this.jwtService.verify<JwtPayload>(accessToken);
+
+      if (await this.isAccessTokenBlacklisted(accessToken)) {
+        throw new UnauthorizedException();
+      }
+
       return this.toAuthenticatedUser(payload);
     } catch (error) {
+      if (error instanceof UnauthorizedException) {
+        throw error;
+      }
       if (!(error instanceof TokenExpiredError)) {
         throw new UnauthorizedException();
       }
@@ -182,6 +231,24 @@ export class AuthService {
     return rotationResult.user;
   }
 
+  private async blacklistAccessToken(
+    accessToken: string,
+    ttlSeconds: number,
+  ): Promise<void> {
+    await this.redisCache.setex(
+      `${ACCESS_TOKEN_BLACKLIST_PREFIX}${hashToken(accessToken)}`,
+      ttlSeconds,
+      '1',
+    );
+  }
+
+  private async isAccessTokenBlacklisted(accessToken: string): Promise<boolean> {
+    const result = await this.redisCache.get(
+      `${ACCESS_TOKEN_BLACKLIST_PREFIX}${hashToken(accessToken)}`,
+    );
+    return result !== null;
+  }
+
   private async issueTokens(
     user: User,
     req: Request,
@@ -252,6 +319,12 @@ export class AuthService {
     );
   }
 
+  private clearTokenCookies(res: Response): void {
+    const options = this.getClearCookieOptions();
+    res.clearCookie(ACCESS_TOKEN_COOKIE, options);
+    res.clearCookie(REFRESH_TOKEN_COOKIE, options);
+  }
+
   private getCookieOptions(ttl: string) {
     const isProduction =
       this.configService.get<string>('nodeEnv') === 'production';
@@ -262,6 +335,18 @@ export class AuthService {
       sameSite: 'lax' as const,
       path: '/',
       maxAge: ttlToMs(ttl),
+    };
+  }
+
+  private getClearCookieOptions() {
+    const isProduction =
+      this.configService.get<string>('nodeEnv') === 'production';
+
+    return {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: 'lax' as const,
+      path: '/',
     };
   }
 }

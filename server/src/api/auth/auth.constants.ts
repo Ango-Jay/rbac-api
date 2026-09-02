@@ -7,6 +7,8 @@ export const REFRESH_TOKEN_GRACE_PERIOD = '10s';
 export const ACCESS_TOKEN_COOKIE = 'access_token';
 export const REFRESH_TOKEN_COOKIE = 'refresh_token';
 
+export const ACCESS_TOKEN_BLACKLIST_PREFIX = 'blacklist:access:';
+
 const TTL_MULTIPLIERS: Record<string, number> = {
   s: 1000,
   m: 60_000,
