@@ -1,4 +1,5 @@
 import {
+  ConflictException,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -12,6 +13,8 @@ import { TokenExpiredError } from 'jsonwebtoken';
 import { DataSource, MoreThan, Repository } from 'typeorm';
 import { RedisCacheHelper } from '../../common/services/redis-cache';
 import { User } from '../users/entities/user.entity';
+import { Organisation } from '../users/organisations/entities/organisation.entity';
+import { USER_ROLES } from '../users/user.constants';
 import {
   ACCESS_TOKEN_BLACKLIST_PREFIX,
   ACCESS_TOKEN_COOKIE,
@@ -23,6 +26,7 @@ import {
   ttlToMs,
 } from './auth.constants';
 import { LoginDto } from './dto/login.dto';
+import { RegisterDto } from './dto/register.dto';
 import { Session } from './sessions/entities/session.entity';
 import { AuthenticatedUser, JwtPayload } from './auth.types';
 
@@ -46,6 +50,58 @@ export class AuthService {
     private readonly dataSource: DataSource,
     private readonly redisCache: RedisCacheHelper,
   ) {}
+
+  async register(dto: RegisterDto): Promise<{ message: string }> {
+    const existingUser = await this.usersRepository.findOne({
+      where: { email: dto.email },
+    });
+
+    if (existingUser) {
+      throw new ConflictException('Email already registered');
+    }
+
+    const passwordHash = await argon2.hash(dto.password);
+
+    if (dto.organisationName) {
+      await this.dataSource.transaction(async (manager) => {
+        const organisation = await manager.save(
+          manager.create(Organisation, {
+            name: dto.organisationName,
+            ownerId: null,
+          }),
+        );
+
+        const user = await manager.save(
+          manager.create(User, {
+            firstName: dto.firstName,
+            lastName: dto.lastName,
+            email: dto.email,
+            password: passwordHash,
+            organisation,
+            role: USER_ROLES.OWNER,
+            status: 'active',
+          }),
+        );
+
+        organisation.ownerId = user.id;
+        await manager.save(organisation);
+      });
+    } else {
+      await this.usersRepository.save(
+        this.usersRepository.create({
+          firstName: dto.firstName,
+          lastName: dto.lastName,
+          email: dto.email,
+          password: passwordHash,
+          organisation: null,
+          role: null,
+          status: 'active',
+        }),
+      );
+    }
+
+    return { message: 'Registration successful' };
+  }
 
   async login(
     dto: LoginDto,

@@ -30,8 +30,8 @@ export class User {
   @JoinColumn({ name: 'organisationId' })
   organisation: Organisation | null;
 
-  @Column()
-  role: string;
+  @Column({ type: 'varchar', nullable: true })
+  role: string | null;
 
   @Column({ default: 'pending' })
   status: string;

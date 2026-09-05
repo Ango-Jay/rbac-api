@@ -28,8 +28,9 @@ export class UserProfileDto {
   @IsOptional()
   organisation: OrganisationProfileDto | null;
 
+  @IsOptional()
   @IsString()
-  role: string;
+  role: string | null;
 
   @IsIn(['active', 'inactive', 'pending', 'deleted'])
   status: string;
