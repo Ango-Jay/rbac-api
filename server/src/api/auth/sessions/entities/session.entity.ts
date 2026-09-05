@@ -33,6 +33,9 @@ export class Session {
   @Column({ type: 'varchar', nullable: true })
   ipAddress: string | null;
 
+  @Column({ type: 'uuid', nullable: true })
+  organisationId: string | null;
+
   @Column({ default: false })
   isRevoked: boolean;
 

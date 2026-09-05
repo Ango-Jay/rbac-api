@@ -3,11 +3,15 @@ import { createHash } from 'crypto';
 export const ACCESS_TOKEN_TTL = '15m';
 export const REFRESH_TOKEN_TTL = '7d';
 export const REFRESH_TOKEN_GRACE_PERIOD = '10s';
+export const LOGIN_CHALLENGE_TTL = '2m';
 
 export const ACCESS_TOKEN_COOKIE = 'access_token';
 export const REFRESH_TOKEN_COOKIE = 'refresh_token';
 
 export const ACCESS_TOKEN_BLACKLIST_PREFIX = 'blacklist:access:';
+export const LOGIN_CHALLENGE_PREFIX = 'login_challenge:';
+
+export const LOGIN_CHALLENGE_PURPOSE = 'login_challenge';
 
 const TTL_MULTIPLIERS: Record<string, number> = {
   s: 1000,

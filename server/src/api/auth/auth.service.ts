@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   UnauthorizedException,
@@ -12,25 +13,42 @@ import type { Request, Response } from 'express';
 import { TokenExpiredError } from 'jsonwebtoken';
 import { DataSource, MoreThan, Repository } from 'typeorm';
 import { RedisCacheHelper } from '../../common/services/redis-cache';
+import { UserProfileDto } from '../users/dto/user-profile.dto';
 import { User } from '../users/entities/user.entity';
 import { Organisation } from '../users/organisations/entities/organisation.entity';
+import { OrganisationMembership } from '../users/organisations/entities/organisation-membership.entity';
+import { OrganisationsService } from '../users/organisations/organisations.service';
 import { USER_ROLES } from '../users/user.constants';
 import {
   ACCESS_TOKEN_BLACKLIST_PREFIX,
   ACCESS_TOKEN_COOKIE,
   ACCESS_TOKEN_TTL,
+  LOGIN_CHALLENGE_PREFIX,
+  LOGIN_CHALLENGE_PURPOSE,
+  LOGIN_CHALLENGE_TTL,
   REFRESH_TOKEN_COOKIE,
   REFRESH_TOKEN_GRACE_PERIOD,
   REFRESH_TOKEN_TTL,
   hashToken,
   ttlToMs,
 } from './auth.constants';
+import { CompleteLoginDto } from './dto/complete-login.dto';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { Session } from './sessions/entities/session.entity';
-import { AuthenticatedUser, JwtPayload } from './auth.types';
+import {
+  AuthenticatedUser,
+  JwtPayload,
+  LoginChallengePayload,
+  LoginChallengeUser,
+} from './auth.types';
 
 type JwtPayloadWithExp = JwtPayload & { exp: number };
+
+type OrgSessionContext = {
+  organisationId: string | null;
+  role: string | null;
+};
 
 type RotationResult = {
   user: AuthenticatedUser;
@@ -45,6 +63,11 @@ export class AuthService {
     private readonly usersRepository: Repository<User>,
     @InjectRepository(Session)
     private readonly sessionsRepository: Repository<Session>,
+    @InjectRepository(OrganisationMembership)
+    private readonly membershipsRepository: Repository<OrganisationMembership>,
+    @InjectRepository(Organisation)
+    private readonly organisationsRepository: Repository<Organisation>,
+    private readonly organisationsService: OrganisationsService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly dataSource: DataSource,
@@ -77,14 +100,21 @@ export class AuthService {
             lastName: dto.lastName,
             email: dto.email,
             password: passwordHash,
-            organisation,
-            role: USER_ROLES.OWNER,
             status: 'active',
           }),
         );
 
         organisation.ownerId = user.id;
         await manager.save(organisation);
+
+        await manager.save(
+          manager.create(OrganisationMembership, {
+            user,
+            organisation,
+            role: USER_ROLES.OWNER,
+            status: 'active',
+          }),
+        );
       });
     } else {
       await this.usersRepository.save(
@@ -93,8 +123,6 @@ export class AuthService {
           lastName: dto.lastName,
           email: dto.email,
           password: passwordHash,
-          organisation: null,
-          role: null,
           status: 'active',
         }),
       );
@@ -103,33 +131,92 @@ export class AuthService {
     return { message: 'Registration successful' };
   }
 
-  async login(
-    dto: LoginDto,
-    req: Request,
-    res: Response,
-  ): Promise<{ message: string }> {
-    const user = await this.usersRepository.findOne({
-      where: { email: dto.email },
+  async verifyCredentials(dto: LoginDto): Promise<{ authToken: string }> {
+    const user = await this.authenticateCredentials(dto.email, dto.password);
+
+    const payload: LoginChallengePayload = {
+      sub: user.id,
+      email: user.email,
+      purpose: LOGIN_CHALLENGE_PURPOSE,
+    };
+
+    const authToken = this.jwtService.sign(payload, {
+      expiresIn: LOGIN_CHALLENGE_TTL,
     });
 
-    if (!user) {
-      throw new UnauthorizedException('Invalid credentials');
+    await this.redisCache.setWithExpiry(
+      this.loginChallengeKey(authToken),
+      Math.floor(ttlToMs(LOGIN_CHALLENGE_TTL) / 1000),
+      user.id,
+    );
+
+    return { authToken };
+  }
+
+  async getLoginOrganisations(
+    challengeUser: LoginChallengeUser,
+  ): Promise<{ organisations: Array<{ id: string; name: string }> }> {
+    return {
+      organisations: await this.organisationsService.getOrganisationsForUser(
+        challengeUser.id,
+      ),
+    };
+  }
+
+  async login(
+    dto: CompleteLoginDto,
+    req: Request,
+    res: Response,
+  ): Promise<UserProfileDto> {
+    const payload = this.verifyLoginChallengeJwt(dto.authToken);
+
+    const consumedUserId = await this.redisCache.getDelValue(
+      this.loginChallengeKey(dto.authToken),
+    );
+
+    if (!consumedUserId || consumedUserId !== payload.sub) {
+      throw new UnauthorizedException();
     }
 
-    const passwordValid = await argon2.verify(user.password, dto.password);
-    if (!passwordValid) {
-      throw new UnauthorizedException('Invalid credentials');
-    }
+    const user = await this.usersRepository.findOne({
+      where: { id: payload.sub },
+    });
 
-    if (!this.isUserActive(user)) {
+    if (!user || !this.isUserActive(user)) {
       throw new UnauthorizedException('Account is not active');
     }
 
-    const { accessToken, refreshToken } = await this.issueTokens(user, req);
+    const orgContext = await this.resolveOrgSessionContext(
+      user.id,
+      dto.organisationId,
+    );
+
+    const { accessToken, refreshToken } = await this.issueTokens(
+      user,
+      req,
+      orgContext,
+    );
 
     this.setTokenCookies(res, accessToken, refreshToken);
 
-    return { message: 'Login successful' };
+    return this.buildUserProfile(user, orgContext);
+  }
+
+  async validateLoginChallenge(authToken: string): Promise<LoginChallengeUser> {
+    const payload = this.verifyLoginChallengeJwt(authToken);
+
+    const storedUserId = await this.redisCache.getValue(
+      this.loginChallengeKey(authToken),
+    );
+
+    if (!storedUserId || storedUserId !== payload.sub) {
+      throw new UnauthorizedException();
+    }
+
+    return {
+      id: payload.sub,
+      email: payload.email,
+    };
   }
 
   async logout(req: Request, res: Response): Promise<{ message: string }> {
@@ -216,7 +303,8 @@ export class AuthService {
     });
 
     if (graceSession?.user && this.isUserActive(graceSession.user)) {
-      return this.toAuthenticatedUserFromUser(graceSession.user);
+      const orgContext = await this.orgContextFromSession(graceSession);
+      return this.toAuthenticatedUserFromUser(graceSession.user, orgContext);
     }
 
     const rotationResult = await this.dataSource.transaction<RotationResult>(
@@ -247,7 +335,10 @@ export class AuthService {
             session.refreshTokenGraceExpiresAt > new Date() &&
             this.isUserActive(session.user)
           ) {
-            return { user: this.toAuthenticatedUserFromUser(session.user) };
+            const orgContext = await this.orgContextFromSession(session);
+            return {
+              user: this.toAuthenticatedUserFromUser(session.user, orgContext),
+            };
           }
 
           throw new UnauthorizedException();
@@ -257,7 +348,8 @@ export class AuthService {
           throw new UnauthorizedException();
         }
 
-        const newAccessToken = this.signAccessToken(session.user);
+        const orgContext = await this.orgContextFromSession(session);
+        const newAccessToken = this.signAccessToken(session.user, orgContext);
         const newRefreshToken = randomUUID();
 
         session.previousRefreshTokenHash = refreshHash;
@@ -269,7 +361,7 @@ export class AuthService {
         await manager.save(session);
 
         return {
-          user: this.toAuthenticatedUserFromUser(session.user),
+          user: this.toAuthenticatedUserFromUser(session.user, orgContext),
           accessToken: newAccessToken,
           refreshToken: newRefreshToken,
         };
@@ -285,6 +377,152 @@ export class AuthService {
     }
 
     return rotationResult.user;
+  }
+
+  private async authenticateCredentials(
+    email: string,
+    password: string,
+  ): Promise<User> {
+    const user = await this.usersRepository.findOne({
+      where: { email },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
+    const passwordValid = await argon2.verify(user.password, password);
+    if (!passwordValid) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
+    if (!this.isUserActive(user)) {
+      throw new UnauthorizedException('Account is not active');
+    }
+
+    return user;
+  }
+
+  private verifyLoginChallengeJwt(authToken: string): LoginChallengePayload {
+    try {
+      const payload =
+        this.jwtService.verify<LoginChallengePayload>(authToken);
+
+      if (payload.purpose !== LOGIN_CHALLENGE_PURPOSE) {
+        throw new UnauthorizedException();
+      }
+
+      return payload;
+    } catch (error) {
+      if (error instanceof UnauthorizedException) {
+        throw error;
+      }
+      throw new UnauthorizedException();
+    }
+  }
+
+  private loginChallengeKey(authToken: string): string {
+    return `${LOGIN_CHALLENGE_PREFIX}${hashToken(authToken)}`;
+  }
+
+  private async resolveOrgSessionContext(
+    userId: string,
+    organisationId?: string,
+  ): Promise<OrgSessionContext> {
+    if (organisationId) {
+      const membership = await this.membershipsRepository.findOne({
+        where: {
+          userId,
+          organisationId,
+          status: 'active',
+        },
+      });
+
+      if (!membership) {
+        throw new UnauthorizedException();
+      }
+
+      return {
+        organisationId: membership.organisationId,
+        role: membership.role,
+      };
+    }
+
+    const activeCount = await this.membershipsRepository.count({
+      where: {
+        userId,
+        status: 'active',
+      },
+    });
+
+    if (activeCount > 0) {
+      throw new BadRequestException('organisationId is required');
+    }
+
+    return {
+      organisationId: null,
+      role: null,
+    };
+  }
+
+  private async orgContextFromSession(
+    session: Session,
+  ): Promise<OrgSessionContext> {
+    if (!session.organisationId) {
+      return {
+        organisationId: null,
+        role: null,
+      };
+    }
+
+    const membership = await this.membershipsRepository.findOne({
+      where: {
+        userId: session.user.id,
+        organisationId: session.organisationId,
+        status: 'active',
+      },
+    });
+
+    if (!membership) {
+      return {
+        organisationId: null,
+        role: null,
+      };
+    }
+
+    return {
+      organisationId: membership.organisationId,
+      role: membership.role,
+    };
+  }
+
+  private async buildUserProfile(
+    user: User,
+    orgContext: OrgSessionContext,
+  ): Promise<UserProfileDto> {
+    let organisation: UserProfileDto['organisation'] = null;
+
+    if (orgContext.organisationId) {
+      const org = await this.organisationsRepository.findOne({
+        where: { id: orgContext.organisationId },
+      });
+
+      if (org) {
+        organisation = { id: org.id, name: org.name };
+      }
+    }
+
+    return {
+      id: user.id,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      email: user.email,
+      organisation,
+      role: orgContext.role,
+      status: user.status,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
+    };
   }
 
   private async blacklistAccessToken(
@@ -308,14 +546,16 @@ export class AuthService {
   private async issueTokens(
     user: User,
     req: Request,
+    orgContext: OrgSessionContext,
   ): Promise<{ accessToken: string; refreshToken: string }> {
-    const accessToken = this.signAccessToken(user);
+    const accessToken = this.signAccessToken(user, orgContext);
     const refreshToken = randomUUID();
     const refreshTokenHash = hashToken(refreshToken);
 
     await this.sessionsRepository.save({
       user,
       refreshTokenHash,
+      organisationId: orgContext.organisationId,
       userAgent: req.headers['user-agent'] ?? null,
       ipAddress: req.ip ?? null,
       expiresAt: new Date(Date.now() + ttlToMs(REFRESH_TOKEN_TTL)),
@@ -324,11 +564,12 @@ export class AuthService {
     return { accessToken, refreshToken };
   }
 
-  private signAccessToken(user: User): string {
+  private signAccessToken(user: User, orgContext: OrgSessionContext): string {
     const payload: JwtPayload = {
       sub: user.id,
       email: user.email,
-      role: user.role,
+      role: orgContext.role,
+      organisationId: orgContext.organisationId,
     };
 
     return this.jwtService.sign(payload);
@@ -342,15 +583,20 @@ export class AuthService {
     return {
       id: payload.sub,
       email: payload.email,
-      role: payload.role,
+      role: payload.role ?? null,
+      organisationId: payload.organisationId ?? null,
     };
   }
 
-  private toAuthenticatedUserFromUser(user: User): AuthenticatedUser {
+  private toAuthenticatedUserFromUser(
+    user: User,
+    orgContext: OrgSessionContext,
+  ): AuthenticatedUser {
     return {
       id: user.id,
       email: user.email,
-      role: user.role,
+      role: orgContext.role,
+      organisationId: orgContext.organisationId,
     };
   }
 

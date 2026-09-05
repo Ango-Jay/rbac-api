@@ -42,6 +42,11 @@ export class RedisCacheHelper implements OnModuleDestroy {
     return this.redisClient.get(key);
   }
 
+  async getDelValue(key: string): Promise<string | null> {
+    await this.ensureConnection();
+    return this.redisClient.getdel(key);
+  }
+
   async findKeysMatching(pattern: string): Promise<string[]> {
     await this.ensureConnection();
     const matchingKeys: string[] = [];

@@ -2,12 +2,11 @@ import {
   Column,
   CreateDateColumn,
   Entity,
-  JoinColumn,
-  ManyToOne,
+  OneToMany,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { Organisation } from '../organisations/entities/organisation.entity';
+import { OrganisationMembership } from '../organisations/entities/organisation-membership.entity';
 
 @Entity('users')
 export class User {
@@ -26,12 +25,8 @@ export class User {
   @Column()
   password: string;
 
-  @ManyToOne(() => Organisation, { nullable: true, eager: false })
-  @JoinColumn({ name: 'organisationId' })
-  organisation: Organisation | null;
-
-  @Column({ type: 'varchar', nullable: true })
-  role: string | null;
+  @OneToMany(() => OrganisationMembership, (membership) => membership.user)
+  memberships: OrganisationMembership[];
 
   @Column({ default: 'pending' })
   status: string;
