@@ -14,12 +14,18 @@ import { AuthService } from './auth.service';
 import { CompleteLoginDto } from './dto/complete-login.dto';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
+import { SendEmailOtpDto } from './dto/send-email-otp.dto';
 import { LoginChallengeGuard } from './guards/login-challenge.guard';
 import type { LoginChallengeRequest } from './auth.types';
 
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
+
+  @Post('send-email-otp')
+  sendEmailOtp(@Body() dto: SendEmailOtpDto) {
+    return this.authService.sendEmailOtp(dto);
+  }
 
   @Post('register')
   @HttpCode(HttpStatus.CREATED)

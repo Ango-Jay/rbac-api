@@ -12,6 +12,8 @@ import { randomUUID } from 'crypto';
 import type { Request, Response } from 'express';
 import { TokenExpiredError } from 'jsonwebtoken';
 import { DataSource, MoreThan, Repository } from 'typeorm';
+import { NotificationService } from '../../common/notification/notification.service';
+import { OtpService } from '../../common/services/otp/otp.service';
 import { RedisCacheHelper } from '../../common/services/redis-cache';
 import { UserProfileDto } from '../users/dto/user-profile.dto';
 import { User } from '../users/entities/user.entity';
@@ -35,6 +37,7 @@ import {
 import { CompleteLoginDto } from './dto/complete-login.dto';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
+import { SendEmailOtpDto } from './dto/send-email-otp.dto';
 import { Session } from './sessions/entities/session.entity';
 import {
   AuthenticatedUser,
@@ -68,13 +71,55 @@ export class AuthService {
     @InjectRepository(Organisation)
     private readonly organisationsRepository: Repository<Organisation>,
     private readonly organisationsService: OrganisationsService,
+    private readonly otpService: OtpService,
+    private readonly notificationService: NotificationService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly dataSource: DataSource,
     private readonly redisCache: RedisCacheHelper,
   ) {}
 
+  async sendEmailOtp(dto: SendEmailOtpDto): Promise<{ message: string }> {
+    const existingUser = await this.usersRepository.findOne({
+      where: { email: dto.email },
+    });
+
+    if (!existingUser) {
+      const { code } = await this.otpService.generate({
+        identifier: dto.email,
+        purpose: 'signup',
+      });
+
+      await this.notificationService.notifyEmail({
+        to: dto.email,
+        subject: 'Your verification code',
+        body: `Your verification code is ${code}`,
+      });
+
+      await this.notificationService.notifyLog({
+        level: 'log',
+        context: 'SendEmailOtp',
+        message: `signup OTP for ${dto.email}: ${code}`,
+      });
+    }
+
+    return {
+      message:
+        'Verification code sent to email',
+    };
+  }
+
   async register(dto: RegisterDto): Promise<{ message: string }> {
+    const otpValid = await this.otpService.verify({
+      identifier: dto.email,
+      purpose: 'signup',
+      submittedCode: dto.otp,
+    });
+
+    if (!otpValid) {
+      throw new UnauthorizedException('Invalid or expired verification code');
+    }
+
     const existingUser = await this.usersRepository.findOne({
       where: { email: dto.email },
     });
