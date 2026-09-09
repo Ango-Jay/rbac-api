@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
+import { OtpService } from './otp/otp.service';
 
 @Injectable()
 export class RedisCacheHelper implements OnModuleDestroy {
@@ -47,6 +48,11 @@ export class RedisCacheHelper implements OnModuleDestroy {
     return this.redisClient.getdel(key);
   }
 
+  async getTtlSeconds(key: string): Promise<number> {
+    await this.ensureConnection();
+    return this.redisClient.ttl(key);
+  }
+
   async findKeysMatching(pattern: string): Promise<string[]> {
     await this.ensureConnection();
     const matchingKeys: string[] = [];
@@ -85,7 +91,7 @@ export class RedisCacheHelper implements OnModuleDestroy {
 
 @Global()
 @Module({
-  providers: [RedisCacheHelper],
-  exports: [RedisCacheHelper],
+  providers: [RedisCacheHelper, OtpService],
+  exports: [RedisCacheHelper, OtpService],
 })
 export class RedisCacheModule {}
