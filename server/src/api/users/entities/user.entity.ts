@@ -22,8 +22,8 @@ export class User {
   @Column({ unique: true })
   email: string;
 
-  @Column()
-  password: string;
+  @Column({ type: 'varchar', nullable: true })
+  password: string | null;
 
   @OneToMany(() => OrganisationMembership, (membership) => membership.user)
   memberships: OrganisationMembership[];

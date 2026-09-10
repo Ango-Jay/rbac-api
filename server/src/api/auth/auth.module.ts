@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
@@ -13,6 +13,7 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { LoginChallengeGuard } from './guards/login-challenge.guard';
+import { RolesGuard } from './guards/roles.guard';
 import { Session } from './sessions/entities/session.entity';
 import { SessionsModule } from './sessions/sessions.module';
 
@@ -20,7 +21,7 @@ import { SessionsModule } from './sessions/sessions.module';
   imports: [
     PassportModule,
     SessionsModule,
-    OrganisationsModule,
+    forwardRef(() => OrganisationsModule),
     NotificationModule,
     TypeOrmModule.forFeature([User, Session, Organisation, OrganisationMembership]),
     JwtModule.registerAsync({
@@ -33,7 +34,7 @@ import { SessionsModule } from './sessions/sessions.module';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtAuthGuard, LoginChallengeGuard],
-  exports: [AuthService, JwtAuthGuard],
+  providers: [AuthService, JwtAuthGuard, LoginChallengeGuard, RolesGuard],
+  exports: [AuthService, JwtAuthGuard, RolesGuard],
 })
 export class AuthModule {}

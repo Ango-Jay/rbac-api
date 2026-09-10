@@ -436,6 +436,10 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
+    if (!user.password) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
     const passwordValid = await argon2.verify(user.password, password);
     if (!passwordValid) {
       throw new UnauthorizedException('Invalid credentials');
