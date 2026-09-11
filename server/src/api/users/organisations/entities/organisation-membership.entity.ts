@@ -37,6 +37,15 @@ export class OrganisationMembership {
   @Column({ default: 'active' })
   status: string;
 
+  @Column({ type: 'varchar', nullable: true })
+  password: string | null;
+
+  @Column({ type: 'uuid', nullable: true, unique: true })
+  inviteToken: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  inviteExpiresAt: Date | null;
+
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 

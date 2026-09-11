@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { AuthService } from './auth.service';
+import { AcceptMemberInviteDto } from './dto/accept-member-invite.dto';
 import { CompleteLoginDto } from './dto/complete-login.dto';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
@@ -31,6 +32,11 @@ export class AuthController {
   @HttpCode(HttpStatus.CREATED)
   register(@Body() dto: RegisterDto) {
     return this.authService.register(dto);
+  }
+
+  @Post('accept-member-invite')
+  acceptMemberInvite(@Body() dto: AcceptMemberInviteDto) {
+    return this.authService.acceptMemberInvite(dto);
   }
 
   @Post('verify-credentials')

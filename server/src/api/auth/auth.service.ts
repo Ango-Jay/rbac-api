@@ -11,7 +11,7 @@ import * as argon2 from 'argon2';
 import { randomUUID } from 'crypto';
 import type { Request, Response } from 'express';
 import { TokenExpiredError } from 'jsonwebtoken';
-import { DataSource, MoreThan, Repository } from 'typeorm';
+import { DataSource, IsNull, MoreThan, Not, Repository } from 'typeorm';
 import { NotificationService } from '../../common/notification/notification.service';
 import { OtpService } from '../../common/services/otp/otp.service';
 import { RedisCacheHelper } from '../../common/services/redis-cache';
@@ -35,6 +35,7 @@ import {
   ttlToMs,
 } from './auth.constants';
 import { CompleteLoginDto } from './dto/complete-login.dto';
+import { AcceptMemberInviteDto } from './dto/accept-member-invite.dto';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { SendEmailOtpDto } from './dto/send-email-otp.dto';
@@ -43,6 +44,7 @@ import {
   AuthenticatedUser,
   JwtPayload,
   LoginChallengePayload,
+  LoginChallengeStore,
   LoginChallengeUser,
 } from './auth.types';
 
@@ -144,7 +146,7 @@ export class AuthService {
             firstName: dto.firstName,
             lastName: dto.lastName,
             email: dto.email,
-            password: passwordHash,
+            password: null,
             status: 'active',
           }),
         );
@@ -158,6 +160,7 @@ export class AuthService {
             organisation,
             role: USER_ROLES.OWNER,
             status: 'active',
+            password: passwordHash,
           }),
         );
       });
@@ -176,8 +179,46 @@ export class AuthService {
     return { message: 'Registration successful' };
   }
 
+  async acceptMemberInvite(
+    dto: AcceptMemberInviteDto,
+  ): Promise<{ message: string }> {
+    const membership = await this.membershipsRepository.findOne({
+      where: {
+        inviteToken: dto.id,
+        status: 'pending',
+      },
+      relations: { user: true },
+    });
+
+    if (
+      !membership ||
+      !membership.inviteExpiresAt ||
+      membership.inviteExpiresAt.getTime() < Date.now()
+    ) {
+      throw new UnauthorizedException('Invalid or expired invitation');
+    }
+
+    const passwordHash = await argon2.hash(dto.password);
+
+    membership.password = passwordHash;
+    membership.status = 'active';
+    membership.inviteToken = null;
+    membership.inviteExpiresAt = null;
+    await this.membershipsRepository.save(membership);
+
+    if (membership.user.status === 'pending') {
+      membership.user.status = 'active';
+      await this.usersRepository.save(membership.user);
+    }
+
+    return { message: 'Invitation accepted' };
+  }
+
   async verifyCredentials(dto: LoginDto): Promise<{ authToken: string }> {
-    const user = await this.authenticateCredentials(dto.email, dto.password);
+    const { user, organisationIds } = await this.authenticateCredentials(
+      dto.email,
+      dto.password,
+    );
 
     const payload: LoginChallengePayload = {
       sub: user.id,
@@ -189,10 +230,15 @@ export class AuthService {
       expiresIn: LOGIN_CHALLENGE_TTL,
     });
 
+    const challengeStore: LoginChallengeStore = {
+      userId: user.id,
+      organisationIds,
+    };
+
     await this.redisCache.setWithExpiry(
       this.loginChallengeKey(authToken),
       Math.floor(ttlToMs(LOGIN_CHALLENGE_TTL) / 1000),
-      user.id,
+      JSON.stringify(challengeStore),
     );
 
     return { authToken };
@@ -201,9 +247,13 @@ export class AuthService {
   async getLoginOrganisations(
     challengeUser: LoginChallengeUser,
   ): Promise<{ organisations: Array<{ id: string; name: string }> }> {
+    if (challengeUser.organisationIds.length === 0) {
+      return { organisations: [] };
+    }
+
     return {
-      organisations: await this.organisationsService.getOrganisationsForUser(
-        challengeUser.id,
+      organisations: await this.organisationsService.getOrganisationsByIds(
+        challengeUser.organisationIds,
       ),
     };
   }
@@ -215,11 +265,12 @@ export class AuthService {
   ): Promise<UserProfileDto> {
     const payload = this.verifyLoginChallengeJwt(dto.authToken);
 
-    const consumedUserId = await this.redisCache.getDelValue(
+    const consumed = await this.redisCache.getDelValue(
       this.loginChallengeKey(dto.authToken),
     );
 
-    if (!consumedUserId || consumedUserId !== payload.sub) {
+    const challengeStore = this.parseLoginChallengeStore(consumed);
+    if (!challengeStore || challengeStore.userId !== payload.sub) {
       throw new UnauthorizedException();
     }
 
@@ -229,6 +280,18 @@ export class AuthService {
 
     if (!user || !this.isUserActive(user)) {
       throw new UnauthorizedException('Account is not active');
+    }
+
+    if (challengeStore.organisationIds.length > 0) {
+      if (!dto.organisationId) {
+        throw new BadRequestException('organisationId is required');
+      }
+
+      if (!challengeStore.organisationIds.includes(dto.organisationId)) {
+        throw new UnauthorizedException();
+      }
+    } else if (dto.organisationId) {
+      throw new UnauthorizedException();
     }
 
     const orgContext = await this.resolveOrgSessionContext(
@@ -250,17 +313,19 @@ export class AuthService {
   async validateLoginChallenge(authToken: string): Promise<LoginChallengeUser> {
     const payload = this.verifyLoginChallengeJwt(authToken);
 
-    const storedUserId = await this.redisCache.getValue(
+    const stored = await this.redisCache.getValue(
       this.loginChallengeKey(authToken),
     );
 
-    if (!storedUserId || storedUserId !== payload.sub) {
+    const challengeStore = this.parseLoginChallengeStore(stored);
+    if (!challengeStore || challengeStore.userId !== payload.sub) {
       throw new UnauthorizedException();
     }
 
     return {
       id: payload.sub,
       email: payload.email,
+      organisationIds: challengeStore.organisationIds,
     };
   }
 
@@ -427,29 +492,81 @@ export class AuthService {
   private async authenticateCredentials(
     email: string,
     password: string,
-  ): Promise<User> {
+  ): Promise<{ user: User; organisationIds: string[] }> {
     const user = await this.usersRepository.findOne({
       where: { email },
     });
 
-    if (!user) {
+    if (!user || !this.isUserActive(user)) {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    if (!user.password) {
-      throw new UnauthorizedException('Invalid credentials');
+    const memberships = await this.membershipsRepository.find({
+      where: {
+        userId: user.id,
+        status: 'active',
+        password: Not(IsNull()),
+      },
+    });
+
+    const organisationIds: string[] = [];
+    for (const membership of memberships) {
+      if (!membership.password) {
+        continue;
+      }
+
+      const matches = await argon2.verify(membership.password, password);
+      if (matches) {
+        organisationIds.push(membership.organisationId);
+      }
     }
 
-    const passwordValid = await argon2.verify(user.password, password);
-    if (!passwordValid) {
-      throw new UnauthorizedException('Invalid credentials');
+    if (organisationIds.length > 0) {
+      return { user, organisationIds };
     }
 
-    if (!this.isUserActive(user)) {
-      throw new UnauthorizedException('Account is not active');
+    const activeMembershipCount = await this.membershipsRepository.count({
+      where: {
+        userId: user.id,
+        status: 'active',
+      },
+    });
+
+    if (activeMembershipCount === 0 && user.password) {
+      const passwordValid = await argon2.verify(user.password, password);
+      if (passwordValid) {
+        return { user, organisationIds: [] };
+      }
     }
 
-    return user;
+    throw new UnauthorizedException('Invalid credentials');
+  }
+
+  private parseLoginChallengeStore(
+    value: string | null,
+  ): LoginChallengeStore | null {
+    if (!value) {
+      return null;
+    }
+
+    try {
+      const parsed = JSON.parse(value) as LoginChallengeStore;
+      if (
+        typeof parsed.userId !== 'string' ||
+        !Array.isArray(parsed.organisationIds)
+      ) {
+        return null;
+      }
+
+      return {
+        userId: parsed.userId,
+        organisationIds: parsed.organisationIds.filter(
+          (id): id is string => typeof id === 'string',
+        ),
+      };
+    } catch {
+      return null;
+    }
   }
 
   private verifyLoginChallengeJwt(authToken: string): LoginChallengePayload {

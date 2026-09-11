@@ -24,6 +24,12 @@ export type LoginChallengePayload = {
 export type LoginChallengeUser = {
   id: string;
   email: string;
+  organisationIds: string[];
+};
+
+export type LoginChallengeStore = {
+  userId: string;
+  organisationIds: string[];
 };
 
 export type AuthenticatedRequest = Request & {

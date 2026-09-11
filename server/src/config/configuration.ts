@@ -1,6 +1,7 @@
 export default () => ({
   port: parseInt(process.env.PORT ?? '3000', 10),
   nodeEnv: process.env.NODE_ENV ?? 'development',
+  clientBaseUrl: process.env.CLIENT_BASE_URL ?? 'http://localhost:3000',
   auth: {
     jwtSecret: process.env.JWT_SECRET,
   },

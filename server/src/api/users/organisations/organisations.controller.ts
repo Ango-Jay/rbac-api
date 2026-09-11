@@ -1,10 +1,13 @@
 import {
   Controller,
+  Get,
+  Headers,
   HttpCode,
   HttpStatus,
   Post,
   Body,
   Req,
+  UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
 import type { AuthenticatedRequest } from '../../auth/auth.types';
@@ -31,5 +34,16 @@ export class OrganisationsController {
       req.user.organisationId!,
       dto,
     );
+  }
+
+  @Get('members/invite')
+  getMemberInvite(
+    @Headers('x-invite-token') inviteToken?: string,
+  ) {
+    if (!inviteToken) {
+      throw new UnauthorizedException('Invalid or expired invitation');
+    }
+
+    return this.organisationsService.getMemberInviteDetails(inviteToken);
   }
 }
