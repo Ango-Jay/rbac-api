@@ -4,18 +4,13 @@ import {
   NOTIFICATION_EMAIL_JOB,
 } from '../queue/queue.constants';
 import { QueueHelper } from '../queue/queue.helper';
-
-export type EnqueueEmailPayload = {
-  to: string;
-  subject: string;
-  body: string;
-};
+import type { EmailMessage } from './notification.types';
 
 @Injectable()
 export class NotificationQueue {
   constructor(private readonly queueHelper: QueueHelper) {}
 
-  async enqueueEmail(payload: EnqueueEmailPayload): Promise<void> {
+  async enqueueEmail(payload: EmailMessage): Promise<void> {
     await this.queueHelper.enqueue(
       NOTIFICATIONS_QUEUE,
       NOTIFICATION_EMAIL_JOB,
