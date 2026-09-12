@@ -1,6 +1,4 @@
-import { Type } from 'class-transformer';
 import {
-  IsDate,
   IsEnum,
   IsObject,
   IsOptional,
@@ -49,11 +47,10 @@ export class CreateActivityLogDto {
   organisationId?: string | null;
 
   @IsOptional()
-  @Type(() => Date)
-  @IsDate()
-  timestamp?: Date;
-
-  @IsOptional()
   @IsObject()
   metadata?: Record<string, unknown> | null;
 }
+
+export type ActivityLogPersistPayload = CreateActivityLogDto & {
+  timestamp: Date;
+};

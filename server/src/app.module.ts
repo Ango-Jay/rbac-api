@@ -8,6 +8,7 @@ import { AppService } from './app.service';
 import { LoggerMiddleware } from './common/middleware/logger.middleware';
 import { ActivityLogsModule } from './common/activity-logs/activity-logs.module';
 import { NotificationModule } from './common/notification/notification.module';
+import { QueueModule } from './common/queue/queue.module';
 import { RedisCacheModule } from './common/services/redis-cache';
 import configuration from './config/configuration';
 import { envValidationSchema } from './config/env.validation';
@@ -26,6 +27,7 @@ import typeormConfig from './config/typeorm';
         configService.getOrThrow('typeorm'),
     }),
     RedisCacheModule,
+    QueueModule,
     NotificationModule,
     ActivityLogsModule,
     AuthModule,

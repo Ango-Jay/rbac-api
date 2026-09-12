@@ -21,6 +21,7 @@ export class ExternalRequestLogService {
       actor: dto.actor,
       actorType: dto.actorType,
       organisationId: dto.organisationId ?? null,
+      timestamp: new Date(),
     });
 
     return this.externalRequestLogsRepository.save(externalRequestLog);

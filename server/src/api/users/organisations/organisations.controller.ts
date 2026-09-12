@@ -33,6 +33,7 @@ export class OrganisationsController {
     return this.organisationsService.createMember(
       req.user.organisationId!,
       dto,
+      req.user.id,
     );
   }
 

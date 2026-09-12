@@ -12,6 +12,12 @@ import { randomUUID } from 'crypto';
 import type { Request, Response } from 'express';
 import { TokenExpiredError } from 'jsonwebtoken';
 import { DataSource, IsNull, MoreThan, Not, Repository } from 'typeorm';
+import { ActivityLogService } from '../../common/activity-logs/activity-log.service';
+import {
+  ActivityLogSource,
+  ActorType,
+} from '../../common/activity-logs/activity-logs.enums';
+import { ACTIVITY_EVENTS } from '../../common/activity-logs/activity-logs.events';
 import { NotificationService } from '../../common/notification/notification.service';
 import { OtpService } from '../../common/services/otp/otp.service';
 import { RedisCacheHelper } from '../../common/services/redis-cache';
@@ -75,6 +81,7 @@ export class AuthService {
     private readonly organisationsService: OrganisationsService,
     private readonly otpService: OtpService,
     private readonly notificationService: NotificationService,
+    private readonly activityLogService: ActivityLogService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly dataSource: DataSource,
@@ -85,6 +92,8 @@ export class AuthService {
     const existingUser = await this.usersRepository.findOne({
       where: { email: dto.email },
     });
+
+    let otpIssued = false;
 
     if (!existingUser) {
       const { code } = await this.otpService.generate({
@@ -103,11 +112,21 @@ export class AuthService {
         context: 'SendEmailOtp',
         message: `signup OTP for ${dto.email}: ${code}`,
       });
+
+      otpIssued = true;
     }
 
+    await this.activityLogService.log({
+      actorType: ActorType.System,
+      actor: 'system',
+      event: ACTIVITY_EVENTS.EMAIL_OTP_SENT,
+      source: ActivityLogSource.Auth,
+      status: 'success',
+      metadata: { email: dto.email, otpIssued },
+    });
+
     return {
-      message:
-        'Verification code sent to email',
+      message: 'Verification code sent to email',
     };
   }
 
@@ -131,9 +150,11 @@ export class AuthService {
     }
 
     const passwordHash = await argon2.hash(dto.password);
+    let userId: string;
+    let organisationId: string | null = null;
 
     if (dto.organisationName) {
-      await this.dataSource.transaction(async (manager) => {
+      const created = await this.dataSource.transaction(async (manager) => {
         const organisation = await manager.save(
           manager.create(Organisation, {
             name: dto.organisationName,
@@ -163,9 +184,14 @@ export class AuthService {
             password: passwordHash,
           }),
         );
+
+        return { userId: user.id, organisationId: organisation.id };
       });
+
+      userId = created.userId;
+      organisationId = created.organisationId;
     } else {
-      await this.usersRepository.save(
+      const user = await this.usersRepository.save(
         this.usersRepository.create({
           firstName: dto.firstName,
           lastName: dto.lastName,
@@ -174,7 +200,18 @@ export class AuthService {
           status: 'active',
         }),
       );
+      userId = user.id;
     }
+
+    await this.activityLogService.log({
+      actorType: ActorType.User,
+      actor: userId,
+      event: ACTIVITY_EVENTS.USER_REGISTERED,
+      source: ActivityLogSource.Auth,
+      status: 'success',
+      organisationId,
+      metadata: { email: dto.email },
+    });
 
     return { message: 'Registration successful' };
   }
@@ -210,6 +247,16 @@ export class AuthService {
       membership.user.status = 'active';
       await this.usersRepository.save(membership.user);
     }
+
+    await this.activityLogService.log({
+      actorType: ActorType.User,
+      actor: membership.userId,
+      event: ACTIVITY_EVENTS.MEMBER_INVITE_ACCEPTED,
+      source: ActivityLogSource.Organisation,
+      sourceId: membership.id,
+      status: 'success',
+      organisationId: membership.organisationId,
+    });
 
     return { message: 'Invitation accepted' };
   }
@@ -307,6 +354,16 @@ export class AuthService {
 
     this.setTokenCookies(res, accessToken, refreshToken);
 
+    await this.activityLogService.log({
+      actorType: ActorType.User,
+      actor: user.id,
+      event: ACTIVITY_EVENTS.USER_LOGGED_IN,
+      source: ActivityLogSource.Auth,
+      status: 'success',
+      organisationId: orgContext.organisationId,
+      ipAddress: req.ip,
+    });
+
     return this.buildUserProfile(user, orgContext);
   }
 
@@ -335,15 +392,22 @@ export class AuthService {
       | string
       | undefined;
 
+    let cleared = false;
+    let actorUserId: string | null = null;
+    let organisationId: string | null = null;
+
     if (accessToken) {
       try {
         const payload =
           this.jwtService.verify<JwtPayloadWithExp>(accessToken);
+        actorUserId = payload.sub;
+        organisationId = payload.organisationId ?? null;
         const ttlSeconds = Math.max(
           1,
           payload.exp - Math.floor(Date.now() / 1000),
         );
         await this.blacklistAccessToken(accessToken, ttlSeconds);
+        cleared = true;
       } catch {
         // Access token missing/invalid/expired: skip blacklist
       }
@@ -352,15 +416,31 @@ export class AuthService {
     if (refreshToken) {
       const session = await this.sessionsRepository.findOne({
         where: { refreshTokenHash: hashToken(refreshToken) },
+        relations: { user: true },
       });
 
       if (session && !session.isRevoked) {
         session.isRevoked = true;
         await this.sessionsRepository.save(session);
+        cleared = true;
+        actorUserId = actorUserId ?? session.user?.id ?? null;
+        organisationId = organisationId ?? session.organisationId ?? null;
       }
     }
 
     this.clearTokenCookies(res);
+
+    if (cleared && actorUserId) {
+      await this.activityLogService.log({
+        actorType: ActorType.User,
+        actor: actorUserId,
+        event: ACTIVITY_EVENTS.USER_LOGGED_OUT,
+        source: ActivityLogSource.Auth,
+        status: 'success',
+        organisationId,
+        ipAddress: req.ip,
+      });
+    }
 
     return { message: 'Logout successful' };
   }

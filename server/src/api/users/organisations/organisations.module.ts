@@ -1,5 +1,6 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { ActivityLogsModule } from '../../../common/activity-logs/activity-logs.module';
 import { NotificationModule } from '../../../common/notification/notification.module';
 import { AuthModule } from '../../auth/auth.module';
 import { User } from '../entities/user.entity';
@@ -13,6 +14,7 @@ import { OrganisationsService } from './organisations.service';
     TypeOrmModule.forFeature([Organisation, OrganisationMembership, User]),
     forwardRef(() => AuthModule),
     NotificationModule,
+    ActivityLogsModule,
   ],
   controllers: [OrganisationsController],
   providers: [OrganisationsService],

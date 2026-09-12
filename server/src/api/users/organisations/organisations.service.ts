@@ -8,6 +8,12 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { randomUUID } from 'crypto';
 import { DataSource, In, Repository } from 'typeorm';
+import { ActivityLogService } from '../../../common/activity-logs/activity-log.service';
+import { ACTIVITY_EVENTS } from '../../../common/activity-logs/activity-logs.events';
+import {
+  ActivityLogSource,
+  ActorType,
+} from '../../../common/activity-logs/activity-logs.enums';
 import { NotificationService } from '../../../common/notification/notification.service';
 import { User } from '../entities/user.entity';
 import { USER_ROLES } from '../user.constants';
@@ -45,6 +51,7 @@ export class OrganisationsService {
     private readonly usersRepository: Repository<User>,
     private readonly dataSource: DataSource,
     private readonly notificationService: NotificationService,
+    private readonly activityLogService: ActivityLogService,
     private readonly configService: ConfigService,
   ) {}
 
@@ -111,6 +118,7 @@ export class OrganisationsService {
   async createMember(
     organisationId: string,
     dto: CreateMemberDto,
+    actorUserId: string,
   ): Promise<CreatedMember> {
     const organisation = await this.organisationsRepository.findOne({
       where: { id: organisationId },
@@ -123,6 +131,9 @@ export class OrganisationsService {
     const existingUser = await this.usersRepository.findOne({
       where: { email: dto.email },
     });
+
+    let created: CreatedMember;
+    let inviteToken: string;
 
     if (existingUser) {
       const existingMembership = await this.membershipsRepository.findOne({
@@ -150,59 +161,67 @@ export class OrganisationsService {
         }),
       );
 
-      await this.sendMemberInviteEmail(
-        existingUser.email,
-        organisation.name,
-        invite.inviteToken,
-      );
-
-      return {
+      inviteToken = invite.inviteToken;
+      created = {
         id: membership.id,
         userId: existingUser.id,
         email: existingUser.email,
         role: membership.role,
         status: membership.status,
       };
-    }
+    } else {
+      const invite = this.buildInviteFields();
 
-    const invite = this.buildInviteFields();
+      created = await this.dataSource.transaction(async (manager) => {
+        // User/membership stay pending until the user creates a password.
+        const user = await manager.save(
+          manager.create(User, {
+            firstName: dto.firstName,
+            lastName: dto.lastName,
+            email: dto.email,
+            password: null,
+            status: 'pending',
+          }),
+        );
 
-    const created = await this.dataSource.transaction(async (manager) => {
-      // User/membership stay pending until the user creates a password.
-      const user = await manager.save(
-        manager.create(User, {
-          firstName: dto.firstName,
-          lastName: dto.lastName,
-          email: dto.email,
-          password: null,
-          status: 'pending',
-        }),
-      );
+        const membership = await manager.save(
+          manager.create(OrganisationMembership, {
+            userId: user.id,
+            organisationId,
+            role: USER_ROLES.MEMBER,
+            status: 'pending',
+            ...invite,
+          }),
+        );
 
-      const membership = await manager.save(
-        manager.create(OrganisationMembership, {
+        return {
+          id: membership.id,
           userId: user.id,
-          organisationId,
-          role: USER_ROLES.MEMBER,
-          status: 'pending',
-          ...invite,
-        }),
-      );
+          email: user.email,
+          role: membership.role,
+          status: membership.status,
+        };
+      });
 
-      return {
-        id: membership.id,
-        userId: user.id,
-        email: user.email,
-        role: membership.role,
-        status: membership.status,
-      };
-    });
+      inviteToken = invite.inviteToken;
+    }
 
     await this.sendMemberInviteEmail(
       created.email,
       organisation.name,
-      invite.inviteToken,
+      inviteToken,
     );
+
+    await this.activityLogService.log({
+      actorType: ActorType.User,
+      actor: actorUserId,
+      event: ACTIVITY_EVENTS.MEMBER_CREATED,
+      source: ActivityLogSource.Organisation,
+      sourceId: created.id,
+      status: 'success',
+      organisationId,
+      metadata: { email: created.email, userId: created.userId },
+    });
 
     return created;
   }

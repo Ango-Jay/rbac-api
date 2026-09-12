@@ -35,6 +35,9 @@ export class ExternalRequestLog {
   @Column({ type: 'uuid', nullable: true })
   organisationId: string | null;
 
+  @Column({ type: 'timestamptz' })
+  timestamp: Date;
+
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 

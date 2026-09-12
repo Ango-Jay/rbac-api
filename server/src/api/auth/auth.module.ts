@@ -7,6 +7,7 @@ import { User } from '../users/entities/user.entity';
 import { Organisation } from '../users/organisations/entities/organisation.entity';
 import { OrganisationMembership } from '../users/organisations/entities/organisation-membership.entity';
 import { OrganisationsModule } from '../users/organisations/organisations.module';
+import { ActivityLogsModule } from '../../common/activity-logs/activity-logs.module';
 import { NotificationModule } from '../../common/notification/notification.module';
 import { ACCESS_TOKEN_TTL } from './auth.constants';
 import { AuthController } from './auth.controller';
@@ -23,6 +24,7 @@ import { SessionsModule } from './sessions/sessions.module';
     SessionsModule,
     forwardRef(() => OrganisationsModule),
     NotificationModule,
+    ActivityLogsModule,
     TypeOrmModule.forFeature([User, Session, Organisation, OrganisationMembership]),
     JwtModule.registerAsync({
       imports: [ConfigModule],
