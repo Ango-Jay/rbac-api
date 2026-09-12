@@ -8,10 +8,22 @@
     "server"
   ],
   "scripts": {
+    "prepare": "husky",
     "dev": "yarn workspace @rbac-api/server start:dev",
     "build": "yarn workspace @rbac-api/server build",
     "start": "yarn workspace @rbac-api/server start:prod",
+    "test": "yarn workspace @rbac-api/server test",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down"
+  },
+  "lint-staged": {
+    "server/**/*.{ts,js,mjs}": [
+      "eslint --fix --config server/eslint.config.mjs",
+      "prettier --write"
+    ]
+  },
+  "devDependencies": {
+    "husky": "^9.1.7",
+    "lint-staged": "^17.5.1"
   }
 }
