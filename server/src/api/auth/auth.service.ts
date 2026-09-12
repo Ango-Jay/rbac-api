@@ -107,11 +107,13 @@ export class AuthService {
         body: `Your verification code is ${code}`,
       });
 
-      await this.notificationService.notifyLog({
-        level: 'log',
-        context: 'SendEmailOtp',
-        message: `signup OTP for ${dto.email}: ${code}`,
-      });
+      if (this.configService.get<string>('nodeEnv') === 'development') {
+        await this.notificationService.notifyLog({
+          level: 'log',
+          context: 'SendEmailOtp',
+          message: `signup OTP for ${dto.email}: ${code}`,
+        });
+      }
 
       otpIssued = true;
     }
@@ -387,10 +389,10 @@ export class AuthService {
   }
 
   async logout(req: Request, res: Response): Promise<{ message: string }> {
-    const accessToken = req.cookies?.[ACCESS_TOKEN_COOKIE] as string | undefined;
+    const accessToken = req.cookies?.[ACCESS_TOKEN_COOKIE] as
+      string | undefined;
     const refreshToken = req.cookies?.[REFRESH_TOKEN_COOKIE] as
-      | string
-      | undefined;
+      string | undefined;
 
     let cleared = false;
     let actorUserId: string | null = null;
@@ -398,8 +400,7 @@ export class AuthService {
 
     if (accessToken) {
       try {
-        const payload =
-          this.jwtService.verify<JwtPayloadWithExp>(accessToken);
+        const payload = this.jwtService.verify<JwtPayloadWithExp>(accessToken);
         actorUserId = payload.sub;
         organisationId = payload.organisationId ?? null;
         const ttlSeconds = Math.max(
@@ -449,7 +450,8 @@ export class AuthService {
     req: Request,
     res: Response,
   ): Promise<AuthenticatedUser> {
-    const accessToken = req.cookies?.[ACCESS_TOKEN_COOKIE] as string | undefined;
+    const accessToken = req.cookies?.[ACCESS_TOKEN_COOKIE] as
+      string | undefined;
 
     if (!accessToken) {
       throw new UnauthorizedException();
@@ -473,8 +475,7 @@ export class AuthService {
     }
 
     const refreshToken = req.cookies?.[REFRESH_TOKEN_COOKIE] as
-      | string
-      | undefined;
+      string | undefined;
 
     if (!refreshToken) {
       throw new UnauthorizedException();
@@ -651,8 +652,7 @@ export class AuthService {
 
   private verifyLoginChallengeJwt(authToken: string): LoginChallengePayload {
     try {
-      const payload =
-        this.jwtService.verify<LoginChallengePayload>(authToken);
+      const payload = this.jwtService.verify<LoginChallengePayload>(authToken);
 
       if (payload.purpose !== LOGIN_CHALLENGE_PURPOSE) {
         throw new UnauthorizedException();
@@ -782,7 +782,9 @@ export class AuthService {
     );
   }
 
-  private async isAccessTokenBlacklisted(accessToken: string): Promise<boolean> {
+  private async isAccessTokenBlacklisted(
+    accessToken: string,
+  ): Promise<boolean> {
     const result = await this.redisCache.getValue(
       `${ACCESS_TOKEN_BLACKLIST_PREFIX}${hashToken(accessToken)}`,
     );

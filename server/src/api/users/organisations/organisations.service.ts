@@ -241,7 +241,8 @@ export class OrganisationsService {
     organisationName: string,
     inviteToken: string,
   ): Promise<void> {
-    const clientBaseUrl = this.configService.getOrThrow<string>('clientBaseUrl');
+    const clientBaseUrl =
+      this.configService.getOrThrow<string>('clientBaseUrl');
     const inviteUrl = `${clientBaseUrl}/signup/member_invite?id=${inviteToken}`;
 
     await this.notificationService.notifyEmail({
@@ -250,11 +251,13 @@ export class OrganisationsService {
       body: `You have been invited to join ${organisationName}. Accept your invite: ${inviteUrl}`,
     });
 
-    await this.notificationService.notifyLog({
-      level: 'log',
-      context: 'MemberInvite',
-      message: `member invite for ${email} to ${organisationName}: ${inviteUrl}`,
-    });
+    if (this.configService.get<string>('nodeEnv') === 'development') {
+      await this.notificationService.notifyLog({
+        level: 'log',
+        context: 'MemberInvite',
+        message: `member invite for ${email} to ${organisationName}: ${inviteUrl}`,
+      });
+    }
   }
 
   private async findValidPendingInvite(
