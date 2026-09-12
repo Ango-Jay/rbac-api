@@ -12,6 +12,7 @@ export const envValidationSchema = Joi.object({
   DATABASE_NAME: Joi.string().required(),
   JWT_SECRET: Joi.string().required(),
   CLIENT_BASE_URL: Joi.string().uri().default('http://localhost:3000'),
+  CORS_ALLOWED_ORIGINS: Joi.string().default('http://localhost:3000'),
   REDIS_HOST: Joi.string().default('localhost'),
   REDIS_PORT: Joi.number().port().default(6379),
   REDIS_USERNAME: Joi.string().optional().allow(''),
