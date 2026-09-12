@@ -29,6 +29,32 @@ services:
       timeout: 5s
       retries: 5
 
+  api:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: rbac-api-server
+    ports:
+      - '4000:4000'
+    environment:
+      PORT: 4000
+      NODE_ENV: production
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_USER: rbac
+      DATABASE_PASSWORD: rbac
+      DATABASE_NAME: rbac_api
+      JWT_SECRET: change-me-in-production
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_USERNAME: ''
+      REDIS_PASSWORD: ''
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
 volumes:
   postgres_data:
   redis_data:

@@ -29,6 +29,16 @@ yarn db:up
 
 `yarn db:up` starts Postgres and Redis via Docker Compose. Adjust `server/.env` if your hosts or credentials differ.
 
+## Docker
+
+From the repo root, build and run the API with Postgres and Redis:
+
+```bash
+docker compose up --build
+```
+
+The API image is defined in `server/Dockerfile` (build context is `server/`). The API is available on `http://localhost:4000`.
+
 ## Run
 
 From the repo root:
@@ -52,7 +62,7 @@ yarn migration:run
 yarn test
 ```
 
-API listens on `PORT` from `.env` (default `3000`).
+API listens on `PORT` from `.env` (default `4000`).
 
 ## Main routes
 

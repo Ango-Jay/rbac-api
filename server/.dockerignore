@@ -1,0 +1,11 @@
+node_modules
+dist
+coverage
+.nyc_output
+.env
+.env.*
+!.env.example
+*.md
+.git
+.gitignore
+.cursor
